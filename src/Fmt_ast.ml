@@ -53,7 +53,11 @@ let protect =
       raise exc
 
 let semic_sep c : Fmt.s =
-  if Poly.(c.conf.break_separators = `Before) then "@,; " else ";@;<1 2>"
+  match c.conf.sequence_style with
+  | `Separator ->
+     if Poly.(c.conf.break_separators = `Before) then " @,; " else " ;@;<1 2>"
+  | `Terminator ->
+     if Poly.(c.conf.break_separators = `Before) then "@,; " else ";@;<1 2>"
 
 let comma_sep c : Fmt.s =
   if Poly.(c.conf.break_separators = `Before) then "@,, " else ",@;<1 2>"
@@ -1076,14 +1080,20 @@ and fmt_pattern c ?pro ?parens ({ctx= ctx0; ast= pat} as xpat) =
         (wrap_if parens "(" ")"
            (wrap_record c
               ( list flds (semic_sep c) fmt_field
-              $ fmt_if Poly.(closed_flag = Open) "; _" )))
+                $ fmt_if Poly.(closed_flag = Open)
+                    (match c.conf.sequence_style with
+                     | `Separator -> " ; _"
+                     | `Terminator -> "; _"
+        ) )))
   | Ppat_array [] ->
       hvbox 0
         (wrap_fits_breaks c.conf "[|" "|]" (Cmts.fmt_within c.cmts ppat_loc))
   | Ppat_array pats ->
       hvbox 0
         (wrap_array c
-           (list pats "@;<0 1>; " (sub_pat ~ctx >> fmt_pattern c)))
+          (list pats (match c.conf.sequence_style with
+                         | `Separator -> " @;<0 1>; "
+                         | `Terminator -> "@;<0 1>; ") (sub_pat ~ctx >> fmt_pattern c)))
   | Ppat_or _ ->
       let nested =
         match ctx0 with
@@ -2204,12 +2214,12 @@ and fmt_expression c ?(box = true) ?epi ?eol ?parens ?(indent_wrap = 0) ?ext
                   (fun grp ->
                     list grp
                       ( match c.conf.sequence_style with
-                      | `Separator when c.conf.break_sequences ->
-                          " ;@;<1000 0>"
-                      | `Separator -> " ;@ "
-                      | `Terminator when c.conf.break_sequences ->
-                          ";@;<1000 0>"
-                      | `Terminator -> ";@ " )
+                        | `Separator when c.conf.break_sequences ->
+                           " ;@;<1000 0>"
+                        | `Separator -> " ;@ "
+                        | `Terminator when c.conf.break_sequences ->
+                           ";@;<1000 0>"
+                        | `Terminator -> ";@ " )
                       (fmt_expression c) ))
            $ fmt_atrs ))
   | Pexp_setfield (e1, lid, e2) ->
