@@ -154,7 +154,7 @@ module C : sig
 
   val from_string :
        default:'a
-    -> name:string
+    -> names:string list
     -> doc:string
     -> (config -> 'a -> config)
     -> (config -> 'a)
@@ -368,23 +368,26 @@ end = struct
     store := Pack opt :: !store ;
     opt
 
-  let from_string ~default:(default:'a) ~name:(name:string) ~doc
-        (update: config -> 'a -> config)
-        (get_value: config -> 'a)
-        (of_string: string -> 'a)
-        (to_string: 'a -> string)
-    : 'a t=
+  let from_string ~(default : 'a) ~names ~doc
+      (update : config -> 'a -> config) (get_value : config -> 'a)
+      (of_string : string -> 'a) (to_string : 'a -> string) : 'a t =
     let open Cmdliner in
-    let names = [name] in
     let section = `Formatting in
     let allow_inline = Poly.(section = `Formatting) in
     let doc = generated_flag_doc ~allow_inline ~doc ~section in
     let docs = section_name section in
     let of_string s = Ok (of_string s) in
-    let print fmt v = Format.fprintf fmt "%s" (to_string v) in
-    let term = Arg.(value & opt (conv (of_string, print)) default & info names ~doc ~docs) in
+    let print fmt v = Format.fprintf fmt "%s%!" (to_string v) in
+    let term =
+      Arg.(
+        value
+        & opt (conv (of_string, print)) default
+        & info names ~doc ~docs)
+    in
     let r = mk ~default term in
-    let cmdline_get () = Some !r in
+    let cmdline_get () =
+      if String.equal (to_string !r) "" then None else Some !r
+    in
     let opt =
       { names
       ; parse= of_string
@@ -1041,10 +1044,10 @@ module Formatting = struct
     let default = [] in
     let doc = "Space-separated list of syntactic constructs used for monads' \
                binds and maps." in
-    let name = "monad-operators" in
+    let names = ["monad-operators"] in
     C.from_string
       ~default
-      ~name
+      ~names
       ~doc
       (fun conf monad_operators -> {conf with monad_operators})
       (fun conf -> conf.monad_operators)
@@ -1302,8 +1305,8 @@ let default_profile =
   ; type_decl= C.default Formatting.type_decl
   ; wrap_comments= C.default Formatting.wrap_comments
   ; wrap_fun_args= C.default Formatting.wrap_fun_args 
-  ; lonely_in = C.default Formatting.lonely_in
-  ; monad_operators= [] }
+  ; lonely_in= C.default Formatting.lonely_in 
+  ; monad_operators= C.default Formatting.monad_operators }
 
 let compact_profile =
   { default_profile with
@@ -1526,44 +1529,49 @@ let parse_line config ~from s =
     | None -> s
   in
   let s = String.strip s in
-  match String.split ~on:'=' s with
-  | [] | [""] -> Ok config
-  | [name; value] ->
-      let name = String.strip name in
-      let value = String.strip value in
-      if List.Assoc.mem ocp_indent_options ~equal:String.equal name then
-        update_ocp_indent_option ~config ~from ~name ~value
-      else update ~config ~from ~name ~value
-  | [s] -> (
-    match
-      ( List.filter (String.split ~on:' ' s) ~f:(fun s ->
-            not (String.is_empty s) )
-      , from )
-    with
-    | ([] | [""]), _ -> impossible "previous match"
-    | [name; value], `File (filename, lnum) ->
-        (* tolerate space separated [var value] to compatibility with older
-           config file format *)
-        if not config.quiet then
-          Format.eprintf
-            "File %a, line %d:\n\
-             Warning: Using deprecated ocamlformat config syntax.\n\
-             Please use `%s = %s`\n"
-            (Fpath.pp ~pretty:true) filename lnum name value ;
-        update ~config ~from ~name ~value
-    (* special case for disable/enable *)
-    | ["enable"], _ -> update ~config ~from ~name:"disable" ~value:"false"
-    | ["normal"], _ -> update_many ~config ~from ocp_indent_normal_profile
-    | ["apprentice"], _ ->
-        update_many ~config ~from ocp_indent_apprentice_profile
-    | ["JaneStreet"], _ ->
-        Result.( >>= )
-          (update ~config ~from ~name:"profile" ~value:"janestreet")
-          (fun config ->
-            update_many ~config ~from ocp_indent_janestreet_profile )
-    | [name], _ -> update ~config ~from ~name ~value:"true"
+  match String.lsplit2 ~on:'=' s with
+  | None -> Ok config
+  | Some (a, b) -> (
+    match [a ; b] with
+    | [] | [""] -> Ok config
+    (* | ["monad-operators"; v]-> Format.printf "%s" v ; List.iter ~f:(fun s
+       -> Format.printf "%s\n" s) (String.split ~on:' ' v); assert false *)
+    | [name; value] ->
+        let name = String.strip name in
+        let value = String.strip value in
+        if List.Assoc.mem ocp_indent_options ~equal:String.equal name then
+          update_ocp_indent_option ~config ~from ~name ~value
+        else update ~config ~from ~name ~value
+    | [s] -> (
+      match
+        ( List.filter (String.split ~on:' ' s) ~f:(fun s ->
+              not (String.is_empty s) )
+        , from )
+      with
+      | ([] | [""]), _ -> impossible "previous match"
+      | [name; value], `File (filename, lnum) ->
+          (* tolerate space separated [var value] to compatibility with
+             older config file format *)
+          if not config.quiet then
+            Format.eprintf
+              "File %a, line %d:\n\
+               Warning: Using deprecated ocamlformat config syntax.\n\
+               Please use `%s = %s`\n"
+              (Fpath.pp ~pretty:true) filename lnum name value ;
+          update ~config ~from ~name ~value
+      (* special case for disable/enable *)
+      | ["enable"], _ -> update ~config ~from ~name:"disable" ~value:"false"
+      | ["normal"], _ -> update_many ~config ~from ocp_indent_normal_profile
+      | ["apprentice"], _ ->
+          update_many ~config ~from ocp_indent_apprentice_profile
+      | ["JaneStreet"], _ ->
+          Result.( >>= )
+            (update ~config ~from ~name:"profile" ~value:"janestreet")
+            (fun config ->
+              update_many ~config ~from ocp_indent_janestreet_profile )
+      | [name], _ -> update ~config ~from ~name ~value:"true"
+      | _ -> Error (`Malformed s) )
     | _ -> Error (`Malformed s) )
-  | _ -> Error (`Malformed s)
 
 let is_project_root dir =
   match root with
